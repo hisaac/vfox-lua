@@ -1,5 +1,6 @@
 --- Compiles and installs Lua from source
 --- @param ctx table Context provided by vfox
+--- @field ctx.sdkInfo table SDK information with version and path
 function PLUGIN:PostInstall(ctx)
     local http = require("http")
     local json = require("json")
@@ -7,6 +8,8 @@ function PLUGIN:PostInstall(ctx)
     local sdkInfo = ctx.sdkInfo["lua"]
     local version = sdkInfo.version
     local sdkPath = sdkInfo.path
+
+    -- mise extracts tarball and strips top-level directory, so sdkPath IS the source directory
 
     -- Determine OS-specific make target
     local os_type = RUNTIME.osType
@@ -25,24 +28,21 @@ function PLUGIN:PostInstall(ctx)
         end
     end
 
-    -- Find the extracted directory
-    local sourceDir = sdkPath .. "/lua-" .. version
-
     -- Build Lua
     local major = tonumber(string.match(version, "^(%d+)"))
     local buildCmd
 
     if major and major >= 5 then
-        -- Lua 5.x: use make local target
+        -- Lua 5.x: use make local target which creates install/ subdirectory
         buildCmd = string.format(
             "cd '%s' && make %s && make local",
-            sourceDir, make_target
+            sdkPath, make_target
         )
     else
         -- Older versions
         buildCmd = string.format(
             "cd '%s' && make && make install INSTALL_ROOT=install",
-            sourceDir
+            sdkPath
         )
     end
 
@@ -51,33 +51,13 @@ function PLUGIN:PostInstall(ctx)
         error("Failed to build Lua: make failed")
     end
 
-    -- Copy built files to install location
-    local copyCmd
-    local major_minor = string.match(version, "^(%d+%.%d+)")
-    local ver_num = 0
-    if major_minor then
-        local maj, min = string.match(major_minor, "^(%d+)%.(%d+)")
-        if maj and min then
-            ver_num = tonumber(maj) * 100 + tonumber(min)
-        end
-    end
-
-    if ver_num >= 502 then
-        -- Lua 5.2+: files are in install/
-        copyCmd = string.format("cp -r '%s/install/'* '%s/'", sourceDir, sdkPath)
-    elseif ver_num >= 500 then
-        -- Lua 5.0-5.1: files are in current directory after make local
-        copyCmd = string.format("cp -r '%s/bin' '%s/include' '%s/lib' '%s/man' '%s/' 2>/dev/null || cp -r '%s/install/'* '%s/'",
-            sourceDir, sourceDir, sourceDir, sourceDir, sdkPath, sourceDir, sdkPath)
-    else
-        -- Older versions
-        copyCmd = string.format("cp -r '%s/install/'* '%s/'", sourceDir, sdkPath)
-    end
-
-    status = os.execute(copyCmd)
-    if status ~= 0 and status ~= true then
-        error("Failed to copy Lua files")
-    end
+    -- After make local, files are in install/ subdirectory
+    -- Move them to the root of sdkPath (overwriting source files is fine)
+    local moveCmd = string.format(
+        "cd '%s' && mv install/* . 2>/dev/null || cp -r install/* . 2>/dev/null",
+        sdkPath
+    )
+    os.execute(moveCmd)
 
     -- Install LuaRocks for Lua 5.x
     if major and major >= 5 then
@@ -103,7 +83,7 @@ function PLUGIN:PostInstall(ctx)
         local luarocksUrl = "https://luarocks.org/releases/luarocks-" .. luarocksVersion .. ".tar.gz"
         local luarocksArchive = sdkPath .. "/luarocks.tar.gz"
 
-        local downloadCmd = string.format("curl -L '%s' -o '%s'", luarocksUrl, luarocksArchive)
+        local downloadCmd = string.format("curl -sL '%s' -o '%s'", luarocksUrl, luarocksArchive)
         status = os.execute(downloadCmd)
         if status ~= 0 and status ~= true then
             -- LuaRocks installation is optional, don't fail
@@ -118,20 +98,27 @@ function PLUGIN:PostInstall(ctx)
 
         local luarocksDir = sdkPath .. "/luarocks-" .. luarocksVersion
         local configureCmd = string.format(
-            "cd '%s' && ./configure --with-lua='%s' --with-lua-include='%s/include' --with-lua-lib='%s/lib' --prefix='%s/luarocks'",
+            "cd '%s' && ./configure --with-lua='%s' --with-lua-include='%s/include' --with-lua-lib='%s/lib' --prefix='%s/luarocks' 2>/dev/null",
             luarocksDir, sdkPath, sdkPath, sdkPath, sdkPath
         )
         status = os.execute(configureCmd)
         if status ~= 0 and status ~= true then
+            -- Clean up and return without luarocks
+            os.execute(string.format("rm -rf '%s/luarocks.tar.gz' '%s/luarocks-'*", sdkPath, sdkPath))
             return
         end
 
-        local bootstrapCmd = string.format("cd '%s' && make bootstrap", luarocksDir)
-        status = os.execute(bootstrapCmd)
-        -- Don't check status, LuaRocks is optional
+        local bootstrapCmd = string.format("cd '%s' && make bootstrap 2>&1", luarocksDir)
+        os.execute(bootstrapCmd)
+
+        -- Clean up LuaRocks source
+        os.execute(string.format("rm -rf '%s/luarocks.tar.gz' '%s/luarocks-'*", sdkPath, sdkPath))
     end
 
-    -- Clean up source directory to save space
-    local cleanCmd = string.format("rm -rf '%s' '%s/luarocks.tar.gz' '%s/luarocks-'*", sourceDir, sdkPath, sdkPath)
+    -- Clean up Lua source files (keep only bin, lib, include, man, share, luarocks)
+    local cleanCmd = string.format(
+        "cd '%s' && rm -rf src doc Makefile README install 2>/dev/null",
+        sdkPath
+    )
     os.execute(cleanCmd)
 end
