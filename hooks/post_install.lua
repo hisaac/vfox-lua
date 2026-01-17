@@ -4,9 +4,9 @@ function PLUGIN:PostInstall(ctx)
     local http = require("http")
     local json = require("json")
 
-    local version = ctx.version
-    local installDir = ctx.rootPath
-    local sdkPath = installDir .. "/" .. version
+    local sdkInfo = ctx.sdkInfo["lua"]
+    local version = sdkInfo.version
+    local sdkPath = sdkInfo.path
 
     -- Determine OS-specific make target
     local os_type = RUNTIME.osType

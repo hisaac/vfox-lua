@@ -2,8 +2,9 @@
 --- @param ctx table Context provided by vfox
 --- @return table Environment configuration
 function PLUGIN:EnvKeys(ctx)
-    local version = ctx.version
-    local installDir = ctx.path
+    local sdkInfo = ctx.sdkInfo["lua"]
+    local version = sdkInfo.version
+    local installDir = sdkInfo.path
 
     -- Extract major.minor version for Lua paths
     local shortVersion = string.match(version, "^(%d+%.%d+)")
